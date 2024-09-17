@@ -1,0 +1,99 @@
+apiVersion: vmoperator.vmware.com/v1alpha1
+kind: VirtualMachine
+metadata:
+  name: cli-vm
+  namespace: demo
+  labels:
+    vm-selector: cli-vm
+    vm-lb-7w9r: vm-lb-selector
+spec:
+  className: best-effort-small
+  imageName: vmi-95516056c7a5c0640
+  storageClass: tanzu-storage-policy
+  powerState: poweredOn
+  volumes:
+    - name: cli-vm-pvc-0
+      persistentVolumeClaim:
+        claimName: cli-vm-pvc-0
+  vmMetadata:
+    secretName: cli-vm-bootstrap-secret
+    transport: CloudInit
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cli-vm-bootstrap-secret
+  namespace: demo
+  labels:
+    vm-selector: cli-vm
+stringData:
+  user-data: |
+        #cloud-config
+        ssh_pwauth: true
+        groups:
+        - admingroup: [root,sys]
+        users:
+          - name: devops
+            gecos: Dev S. Ops
+            lock_passwd: false
+            passwd: $6$n/zJuy.x/O0oRKHp$sRK0wNmKkTRX26poRTVPIsXiz4u9SvVR2euzNV7ZXR9DTD.L3XgH0TgZZyxiGE1Mw.B6D8YcqCrLpwDCoRnBQ.
+            # Password set to DevOps123
+            sudo: ALL=(ALL) NOPASSWD:ALL
+            groups: sudo, users, admin
+            shell: /bin/bash
+        runcmd:
+          # Update packages
+          - sudo apt-get update && sudo apt-get upgrade
+          # Install tools
+          - sudo apt install -y ca-certificates curl wget gnupg net-tools zip unzip jq zsh bat bash-completion whois
+          # Install kubectl
+          - curl curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+          - sudo echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+          - sudo apt-get update && sudo apt-get install -y kubectl
+          # Install kubectl-vsphere plugin
+          - curl -ks https://iaas.demo.lab/wcp/plugin/linux-amd64/vsphere-plugin.zip -o /tmp/vsphere-plugin.zip
+          - unzip -qn /tmp/vsphere-plugin.zip -d /tmp
+          - sudo install /tmp/bin/kubectl-vsphere /usr/local/bin
+          # Install Docker
+          - curl -fsSL https://get.docker.com -o get-docker.sh
+          - sudo sh get-docker.sh
+          - sudo usermod -aG docker devops
+          # Install Carvel tools
+          - wget -O- https://carvel.dev/install.sh > install.sh
+          - sudo bash install.sh
+          # Mount Persistent Volume
+          - parted -s /dev/sdb -- mkpart primary ext4 0% 100%
+          - mkfs -t ext4 /dev/sdb1
+          - mkdir -p /mnt/pv
+          - echo '/dev/sdb1 /mnt/pv ext4 defaults 0 2' >>/etc/fstab
+          - mount -a
+---
+apiVersion: vmoperator.vmware.com/v1alpha1
+kind: VirtualMachineService
+metadata:
+  name: vm-lb-7w9r
+  namespace: demo
+spec:
+  selector:
+    vm-lb-7w9r: vm-lb-selector
+  type: LoadBalancer
+  ports:
+    - name: ssh
+      protocol: TCP
+      port: 22
+      targetPort: 22
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cli-vm-pvc-0
+  namespace: demo
+  labels:
+    vm-selector: cli-vm
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: tanzu-storage-policy
